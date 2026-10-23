@@ -23,3 +23,8 @@
 -keepclasseswithmembers class * {
     native <methods>;
 }
+
+# libXlorie.so resolves these classes and members by name from JNI (FindClass / GetFieldID /
+# GetMethodID / RegisterNatives), so R8 shrinking would make the X server abort at startup.
+-keep class com.termux.x11.** { *; }
+-keep class com.winlator.xenvironment.components.XlorieServerComponent { *; }

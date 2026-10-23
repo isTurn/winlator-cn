@@ -45,6 +45,9 @@ public class TaskManagerDialog extends ContentDialog implements OnGetProcessInfo
     private final LayoutInflater inflater;
     private Timer timer;
     private final Object lock = new Object();
+    // Set once winhandler.exe has answered at least one GET_PROCESS request. Until then the guest
+    // side is not enumerating anything and /proc is the best list we can offer.
+    private boolean receivedFromWinHandler;
     private BroadcastReceiver batteryReceiver;
     private final BatteryInfo batteryInfo = new BatteryInfo();
     private final Panel cpuPanel;
@@ -192,7 +195,19 @@ public class TaskManagerDialog extends ContentDialog implements OnGetProcessInfo
 
     private void update() {
         synchronized (lock) {
-            activity.getWinHandler().listProcesses();
+            WinHandler winHandler = activity.getWinHandler();
+
+            // winhandler.exe is the only component that can enumerate real Windows processes, but it
+            // runs inside the guest and everything sent before its INIT packet is dropped on the
+            // floor. While that is not the case (guest still booting, winhandler.exe failed to
+            // start, ...) fall back to the Android side /proc tree so the dialog is not just an
+            // empty "no items to display" box.
+            if (winHandler.isInitialized() && receivedFromWinHandler) {
+                winHandler.listProcesses();
+            }
+            else {
+                renderLocalProcesses();
+            }
 
             final LinearLayout container = findViewById(R.id.LLProcessList);
             if (container.getChildCount() == 0) findViewById(R.id.TVEmptyText).setVisibility(View.VISIBLE);
@@ -201,6 +216,90 @@ public class TaskManagerDialog extends ContentDialog implements OnGetProcessInfo
         updateCPUPanel();
         updateMemoryPanel();
         updateBatteryPanel();
+    }
+
+    /**
+     * Process list built straight from /proc, used while winhandler.exe cannot be reached. Only the
+     * tree spawned below this app's pid is considered, which is exactly the box64/Wine process tree
+     * the task manager is supposed to display; Wine's own .exe processes are flagged by
+     * ProcessHelper.PStat.guestProcess.
+     */
+    /**
+     * The guest process tree: everything named like Wine/box64 plus our own direct children.
+     * ProcessHelper.getChildProcesses() also returns unrelated processes with a higher pid, so it is
+     * narrowed down here.
+     */
+    private ArrayList<ProcessHelper.PStat> collectGuestProcesses() {
+        ArrayList<ProcessHelper.PStat> result = new ArrayList<>();
+        int selfPid = android.os.Process.myPid();
+
+        for (ProcessHelper.PStat pstat : ProcessHelper.getChildProcesses()) {
+            if (pstat.pid == selfPid) continue;
+            if (pstat.guestProcess || pstat.parentPID == selfPid) result.add(pstat);
+        }
+
+        return result;
+    }
+
+    private void renderLocalProcesses() {
+        final LinearLayout container = findViewById(R.id.LLProcessList);
+        ArrayList<ProcessHelper.PStat> processes = new ArrayList<>();
+
+        for (ProcessHelper.PStat pstat : collectGuestProcesses()) {
+            if (pstat.pid <= 0 || pstat.state == ProcessHelper.PState.DEAD) continue;
+            processes.add(pstat);
+        }
+
+        processes.sort((a, b) -> Integer.compare(a.pid, b.pid));
+
+        setBottomBarText(activity.getString(R.string.processes)+": "+processes.size());
+
+        if (processes.isEmpty()) {
+            container.removeAllViews();
+            findViewById(R.id.TVEmptyText).setVisibility(View.VISIBLE);
+            return;
+        }
+
+        findViewById(R.id.TVEmptyText).setVisibility(View.GONE);
+
+        int childCount = container.getChildCount();
+
+        for (int i = 0; i < processes.size(); i++) {
+            final ProcessHelper.PStat pstat = processes.get(i);
+            View itemView = i < childCount ? container.getChildAt(i) : inflater.inflate(R.layout.process_info_list_item, container, false);
+
+            String name = pstat.name.isEmpty() ? pstat.shortName : pstat.name;
+            ((TextView)itemView.findViewById(R.id.TVName)).setText(name);
+            ((TextView)itemView.findViewById(R.id.TVPID)).setText(String.valueOf(pstat.pid));
+            ((TextView)itemView.findViewById(R.id.TVMemoryUsage)).setText(StringUtils.formatBytes(ProcessHelper.getMemoryUsage(pstat.pid)));
+
+            ImageView ivIcon = itemView.findViewById(R.id.IVIcon);
+            ivIcon.setImageResource(R.drawable.taskmgr_process);
+
+            // No window handle and no UDP socket in this mode, so only "end process" is meaningful.
+            itemView.findViewById(R.id.BTMenu).setOnClickListener((v) -> {
+                PopupMenu menu = new PopupMenu(activity, v);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) menu.setForceShowIcon(true);
+                menu.inflate(R.menu.process_popup_menu);
+                menu.getMenu().findItem(R.id.menu_item_process_affinity).setVisible(false);
+                menu.getMenu().findItem(R.id.menu_item_bring_to_front).setVisible(false);
+                menu.setOnMenuItemClickListener((item) -> {
+                    if (item.getItemId() == R.id.menu_item_end_process) {
+                        ContentDialog.confirm(activity, R.string.do_you_want_to_end_this_process, () -> {
+                            ProcessHelper.killProcess(pstat.pid);
+                            update();
+                        });
+                        return true;
+                    }
+                    return false;
+                });
+                menu.show();
+            });
+
+            if (i >= childCount) container.addView(itemView);
+        }
+
+        for (int i = childCount-1; i >= processes.size(); i--) container.removeViewAt(i);
     }
 
     private void showListItemMenu(final View anchorView, final ProcessInfo processInfo) {
@@ -263,6 +362,8 @@ public class TaskManagerDialog extends ContentDialog implements OnGetProcessInfo
     public void onGetProcessInfo(int index, int numProcesses, ProcessInfo processInfo) {
         activity.runOnUiThread(() -> {
             synchronized (lock) {
+                if (numProcesses > 0) receivedFromWinHandler = true;
+
                 final LinearLayout container = findViewById(R.id.LLProcessList);
                 setBottomBarText(activity.getString(R.string.processes)+": " + numProcesses);
 

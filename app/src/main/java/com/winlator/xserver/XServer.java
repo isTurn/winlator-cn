@@ -15,6 +15,7 @@ import com.winlator.xserver.extensions.PresentExtension;
 import com.winlator.xserver.extensions.SyncExtension;
 import com.winlator.xserver.extensions.XComposite;
 import com.winlator.xserver.extensions.XInputExtension;
+import com.termux.x11.LorieView;
 
 import java.nio.charset.Charset;
 import java.util.EnumMap;
@@ -145,9 +146,26 @@ public class XServer {
         return null;
     }
 
+    // ---- input bridge to the termux-x11 X server (libXlorie.so) -------------------------------
+    // The Java X protocol implementation is no longer what wine talks to, so every injected event is
+    // forwarded to the native server through the LorieView socket. The local Pointer/Keyboard state is
+    // still maintained because the touchpad code reads pointer.getX()/getY() and the pinch math.
+
+    private LorieView lorieView;
+
+    public void setLorieView(LorieView lorieView) {
+        this.lorieView = lorieView;
+    }
+
+    public LorieView getLorieView() {
+        return lorieView;
+    }
+
     public void injectPointerMove(int x, int y) {
         try (XLock lock = lock(Lockable.WINDOW_MANAGER, Lockable.INPUT_DEVICE)) {
             pointer.setPosition(x, y);
+            LorieView view = lorieView;
+            if (view != null) view.sendMouseEvent(pointer.getX(), pointer.getY(), LorieView.BUTTON_UNDEFINED, false, false);
         }
     }
 
@@ -156,8 +174,8 @@ public class XServer {
             pointer.setPosition(pointer.getX() + dx, pointer.getY() + dy);
             if (cursorLocker == null) pointer.clampPosition();
 
-            XInputExtension xInputExtension = getExtension(XInputExtension.class);
-            if (xInputExtension != null) xInputExtension.sendRawMotion(dx, dy);
+            LorieView view = lorieView;
+            if (view != null) view.sendMouseEvent(pointer.getX(), pointer.getY(), LorieView.BUTTON_UNDEFINED, false, false);
         }
     }
 
@@ -172,8 +190,17 @@ public class XServer {
         try (XLock lock = lock(Lockable.WINDOW_MANAGER, Lockable.INPUT_DEVICE)) {
             pointer.setButton(buttonCode, true);
 
-            XInputExtension xInputExtension = getExtension(XInputExtension.class);
-            if (xInputExtension != null) xInputExtension.sendRawButtonState(buttonCode.code(), true);
+            LorieView view = lorieView;
+            if (view != null) {
+                // termux-x11 has no scroll buttons: the wheel is detail==4 carrying a relative
+                // valuator that the native side divides by 120 (cmdentrypoint.cpp EVENT_MOUSE case 4),
+                // so one notch has to be sent as a full 120 units here.
+                if (buttonCode == Pointer.Button.BUTTON_SCROLL_UP) view.sendMouseWheelEvent(0, WHEEL_NOTCH);
+                else if (buttonCode == Pointer.Button.BUTTON_SCROLL_DOWN) view.sendMouseWheelEvent(0, -WHEEL_NOTCH);
+                else if (buttonCode == Pointer.Button.BUTTON_SCROLL_CLICK_LEFT) view.sendMouseWheelEvent(WHEEL_NOTCH, 0);
+                else if (buttonCode == Pointer.Button.BUTTON_SCROLL_CLICK_RIGHT) view.sendMouseWheelEvent(-WHEEL_NOTCH, 0);
+                else view.sendMouseEvent(pointer.getX(), pointer.getY(), lorieButton(buttonCode), true, false);
+            }
         }
     }
 
@@ -198,24 +225,81 @@ public class XServer {
         try (XLock lock = lock(Lockable.WINDOW_MANAGER, Lockable.INPUT_DEVICE)) {
             pointer.setButton(buttonCode, false);
 
-            XInputExtension xInputExtension = getExtension(XInputExtension.class);
-            if (xInputExtension != null) xInputExtension.sendRawButtonState(buttonCode.code(), false);
+            LorieView view = lorieView;
+            if (view != null && buttonCode != Pointer.Button.BUTTON_SCROLL_UP &&
+                buttonCode != Pointer.Button.BUTTON_SCROLL_DOWN &&
+                buttonCode != Pointer.Button.BUTTON_SCROLL_CLICK_LEFT &&
+                buttonCode != Pointer.Button.BUTTON_SCROLL_CLICK_RIGHT) {
+                view.sendMouseEvent(pointer.getX(), pointer.getY(), lorieButton(buttonCode), false, false);
+            }
         }
     }
+
+    /** Maps winlator's button enum onto termux-x11's pointer detail values (1=left, 2=middle, 3=right). */
+    private static int lorieButton(Pointer.Button button) {
+        switch (button) {
+            case BUTTON_LEFT: return LorieView.BUTTON_LEFT;
+            case BUTTON_MIDDLE: return LorieView.BUTTON_MIDDLE;
+            case BUTTON_RIGHT: return LorieView.BUTTON_RIGHT;
+            default: return LorieView.BUTTON_UNDEFINED;
+        }
+    }
+
+    /** One wheel notch in the units termux-x11 expects (it divides by 120 before the X valuator). */
+    private static final float WHEEL_NOTCH = 120f;
+
+    private static final int XK_RETURN = 0xFF0D;
+    private static final int XK_TAB = 0xFF09;
+    private static final int XK_BACKSPACE = 0xFF08;
+    private static final int XK_ESCAPE = 0xFF1B;
+    private static final int XK_DELETE = 0xFFFF;
+    private static final int XK_UNICODE_PREFIX = 0x01000000;
+    private static final int LINUX_KEYCODE_OFFSET = 8;
 
     public void injectKeyPress(XKeycode xKeycode) {
         injectKeyPress(xKeycode, 0);
     }
 
     public void injectKeyPress(XKeycode xKeycode, int keysym) {
-        try (XLock lock = lock(Lockable.WINDOW_MANAGER, Lockable.INPUT_DEVICE)) {
-            keyboard.setKeyPress(xKeycode.id, keysym);
+        LorieView view = lorieView;
+        if (view == null) return;
+
+        // A real character that is not reachable through the X keymap (CJK, symbols typed through the
+        // IME) goes through the unicode channel; everything else is a plain keycode press, which keeps
+        // modifier combinations such as Ctrl+V working.
+        int codePoint = unicodeCodePoint(keysym);
+        if (codePoint > 0) {
+            view.sendTextEvent(new String(Character.toChars(codePoint)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return;
         }
+
+        // lorie expects the linux input keycode, which is the X keycode minus the 8 offset of the
+        // core protocol range; passing 0 as scanCode makes it fall back to the android_to_linux table.
+        view.sendKeyEvent(xKeycode.id - LINUX_KEYCODE_OFFSET, androidKeyCodeForKeysym(keysym), true);
     }
 
     public void injectKeyRelease(XKeycode xKeycode) {
-        try (XLock lock = lock(Lockable.WINDOW_MANAGER, Lockable.INPUT_DEVICE)) {
-            keyboard.setKeyRelease(xKeycode.id);
+        LorieView view = lorieView;
+        if (view == null) return;
+        view.sendKeyEvent(xKeycode.id - LINUX_KEYCODE_OFFSET, 0, false);
+    }
+
+    /** Returns the code point to type as text, or 0 when the press must stay a keycode press. */
+    private static int unicodeCodePoint(int keysym) {
+        if (keysym <= 0 || keysym >= 0xFF00) return 0;
+        if (keysym >= XK_UNICODE_PREFIX && keysym <= XK_UNICODE_PREFIX + 0x10FFFF) return keysym - XK_UNICODE_PREFIX;
+        if (keysym > 0x7F) return keysym; // latin-1 supplement, not present in the US keymap
+        return 0;
+    }
+
+    private static int androidKeyCodeForKeysym(int keysym) {
+        switch (keysym) {
+            case XK_RETURN: return android.view.KeyEvent.KEYCODE_ENTER;
+            case XK_TAB: return android.view.KeyEvent.KEYCODE_TAB;
+            case XK_BACKSPACE: return android.view.KeyEvent.KEYCODE_DEL;
+            case XK_ESCAPE: return android.view.KeyEvent.KEYCODE_ESCAPE;
+            case XK_DELETE: return android.view.KeyEvent.KEYCODE_FORWARD_DEL;
+            default: return 0;
         }
     }
 

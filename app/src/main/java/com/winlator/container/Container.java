@@ -24,8 +24,11 @@ public class Container {
     public static final boolean DEFAULT_SWAP_RESOLUTION = false;
     public static final String DEFAULT_AUDIO_DRIVER = AudioDrivers.ALSA;
     public static final String DEFAULT_DXWRAPPER = DXWrappers.DXVK;
-    public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=0,directplay=0,xaudio=1,vcrun2005=0,vcrun2010=1,wmdecoder=1";
-    public static final String FALLBACK_WINCOMPONENTS = "direct3d=0,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,vcrun2005=0,vcrun2010=0,wmdecoder=0";
+    // winmm 默认「原装先于内建」= native,builtin，让 Wine 优先加载 Windows 自带的 winmm.dll。
+    // 注意：DEFAULT_WINCOMPONENTS 与 FALLBACK_WINCOMPONENTS 必须保持完全相同的键与顺序，
+    // 因为 WineUtils.overrideWinComponentDlls() / extractWinComponentFiles() 是按位置逐项配对旧值的。
+    public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=1,directmusic=1,directshow=0,directplay=0,xaudio=1,vcrun2005=0,vcrun2010=1,wmdecoder=1,winmm=1";
+    public static final String FALLBACK_WINCOMPONENTS = "direct3d=0,directsound=0,directmusic=0,directshow=0,directplay=0,xaudio=0,vcrun2005=0,vcrun2010=0,wmdecoder=0,winmm=0";
     // 含 AppUtils.getInternalStorage()(按实际包名生成)，故由常量改为方法，避免类加载时冻结取值
     public static String getDefaultDrives() {
         return "D:"+AppUtils.DIRECTORY_DOWNLOADS +"E:"+AppUtils.getInternalStorage();

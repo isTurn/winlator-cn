@@ -173,6 +173,7 @@
     <string name="vcrun2005" translatable="false">Visual C++ 2005</string>
     <string name="vcrun2010" translatable="false">VC++2010运行库(无需调整)</string>
     <string name="wmdecoder" translatable="false">WindowsMedia解码器(无需调整)</string>
+    <string name="winmm" translatable="false">多媒体库(winmm)</string>
     <string name="settings">高级设置</string>
     <string name="exec_arguments" translatable="false">Exec参数</string>
     <string name="win_components" translatable="false">函数库</string>

@@ -128,6 +128,15 @@ public class WinHandler {
         });
     }
 
+    /**
+     * True once winhandler.exe has sent its INIT packet, i.e. the guest side is actually running and
+     * can answer requests. Everything queued before that is silently dropped, so callers that can
+     * work without it (the task manager falls back to /proc) need a way to tell.
+     */
+    public boolean isInitialized() {
+        return initReceived;
+    }
+
     public void listProcesses() {
         addAction(() -> {
             sendData.rewind();
@@ -452,12 +461,16 @@ public class WinHandler {
     }
 
     public void start() {
+        // winhandler.exe binds and sends to 127.0.0.1 (the guest side lives in the same network
+        // namespace), so prefer the loopback explicitly. InetAddress.getLocalHost() resolves to the
+        // Wi-Fi/mobile address on many devices and the guest would then never receive our datagrams,
+        // which silently leaves the task manager empty.
         try {
-            localhost = InetAddress.getLocalHost();
+            localhost = InetAddress.getByName("127.0.0.1");
         }
         catch (UnknownHostException e) {
             try {
-                localhost = InetAddress.getByName("127.0.0.1");
+                localhost = InetAddress.getLocalHost();
             }
             catch (UnknownHostException ex) {}
         }

@@ -9,12 +9,15 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
+import android.opengl.GLES20;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
@@ -89,13 +92,14 @@ import com.winlator.xenvironment.components.PulseAudioComponent;
 import com.winlator.xenvironment.components.SysVSharedMemoryComponent;
 import com.winlator.xenvironment.components.VirGLRendererComponent;
 import com.winlator.xenvironment.components.VortekRendererComponent;
-import com.winlator.xenvironment.components.XServerComponent;
+import com.winlator.xenvironment.components.XlorieServerComponent;
 import com.winlator.xserver.Atom;
 import com.winlator.xserver.Property;
 import com.winlator.xserver.ScreenInfo;
 import com.winlator.xserver.Window;
 import com.winlator.xserver.WindowManager;
 import com.winlator.xserver.XServer;
+import com.termux.x11.LorieView;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -108,6 +112,11 @@ import java.util.concurrent.Executors;
 
 public class XServerDisplayActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener {
     private XServerView xServerView;
+    private LorieView lorieView;
+    private PreloaderDialog preloaderDialog;
+    private volatile boolean preloaderDismissed; // also written from the libXlorie render thread
+    /** Fallback in case libXlorie never reports a viewport (e.g. Wine dies before the first frame). */
+    private static final long PRELOADER_TIMEOUT_MS = 30000;
     private InputControlsView inputControlsView;
     private TouchpadView touchpadView;
     private XEnvironment environment;
@@ -162,7 +171,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         // 只抓容器运行期间的 logcat：此处清空重抓，退出时停止，文件保留。
         MainApplication.startLogcatSession(this);
 
-        final PreloaderDialog preloaderDialog = new PreloaderDialog(this);
+        preloaderDialog = new PreloaderDialog(this);
         preferences = PreferenceManager.getDefaultSharedPreferences(this);
         boolean useAndroidClipboardOnWine = preferences.getBoolean("use_android_clipboard_on_wine", false);
         clipboardManager = useAndroidClipboardOnWine ? (ClipboardManager)getSystemService(CLIPBOARD_SERVICE) : null;
@@ -265,6 +274,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
 
         preloaderDialog.show(R.string.starting_up);
+        schedulePreloaderTimeout();
 
         inputControlsManager = new InputControlsManager(this);
         xServer = new XServer(this, screenInfo);
@@ -280,7 +290,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             public void onMapWindow(Window window) {
                 if (!flags[0] && window.isRenderable() && !window.getClassName().isEmpty()) {
                     xServerView.getRenderer().setCursorVisible(true);
-                    preloaderDialog.closeOnUiThread();
+                    dismissPreloader();
                     flags[0] = true;
                 }
 
@@ -302,12 +312,25 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         setupUI();
 
         Executors.newSingleThreadExecutor().execute(() -> {
-            if (!isGenerateWineprefix()) {
-                setupWineSystemFiles();
-                extractGraphicsDriverFiles();
-                changeWineAudioDriver();
+            try {
+                if (!isGenerateWineprefix()) {
+                    setupWineSystemFiles();
+                    extractGraphicsDriverFiles();
+                    changeWineAudioDriver();
+                }
+                setupXEnvironment();
             }
-            setupXEnvironment();
+            catch (final Throwable e) {
+                // Without this the default uncaught handler takes the whole app down and all the
+                // user sees is a "crash on entering the container" with no hint about why. The X
+                // server failing to come up (bad argv, missing TMPDIR/XKB_CONFIG_ROOT, ...) lands
+                // here, so surface it instead of dying silently.
+                Log.e("XServerDisplayActivity", "Failed to set up the X environment", e);
+                runOnUiThread(() -> {
+                    dismissPreloader();
+                    AppUtils.showToast(this, getString(R.string.starting_up)+"\n"+e);
+                });
+            }
         });
     }
 
@@ -599,7 +622,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         String wineDebugChannels = preferences.getString("wine_debug_channels", SettingsFragment.DEFAULT_WINE_DEBUG_CHANNELS);
         envVars.put("WINEDEBUG", enableWineDebug && !wineDebugChannels.isEmpty() ? "+"+wineDebugChannels.replace(",", ",+") : "-all");
 
-        FileUtils.clear(rootFS.getTmpDir());
+        // Keeps .X11-unix/X0 and the display lock alive when a native X server is already running in
+        // this process (activity recreated for another container); see clearTmpDir().
+        XlorieServerComponent.clearTmpDir(rootFS.getTmpDir());
 
         GuestProgramLauncherComponent guestProgramLauncherComponent = new GuestProgramLauncherComponent();
 
@@ -627,7 +652,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         environment = new XEnvironment(this, rootFS);
         environment.addComponent(new SysVSharedMemoryComponent(xServer, UnixSocketConfig.create(rootPath, UnixSocketConfig.SYSVSHM_SERVER_PATH)));
-        environment.addComponent(new XServerComponent(xServer, UnixSocketConfig.create(rootPath, UnixSocketConfig.XSERVER_PATH)));
+        environment.addComponent(new XlorieServerComponent(xServer));
         environment.addComponent(new NetworkInfoUpdateComponent());
 
         if (audioDriver.equals(AudioDrivers.ALSA)) {
@@ -673,6 +698,26 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
         environment.startEnvironmentComponents();
 
+        // Hand the native X server its event/input socket. This has to happen on a thread with a
+        // Looper, because libXlorie registers the fd with ALooper_forThread().
+        final XlorieServerComponent xlorieServer = environment.getComponent(XlorieServerComponent.class);
+        if (xlorieServer != null) {
+            final int xConnectionFd = xlorieServer.openXConnection();
+            if (xConnectionFd >= 0) {
+                runOnUiThread(() -> {
+                    if (lorieView != null) {
+                        lorieView.connect(xConnectionFd);
+                        lorieView.setClipboardSyncEnabled(true);
+                        lorieView.updateViewport();
+                        lorieView.sendWindowChange();
+                    }
+                    else {
+                        Log.e("XServerDisplayActivity", "LorieView is missing, dropping the X connection");
+                    }
+                });
+            }
+        }
+
         winHandler.start();
         envVars.clear();
         graphicsDriver = null;
@@ -695,6 +740,36 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         xServer.setRenderer(renderer);
         rootView.addView(xServerView);
+
+        // The Java X server view is kept only as a placeholder: all drawing now comes from
+        // libXlorie.so into the LorieView surface layered on top of it.
+        xServerView.setVisibility(View.GONE);
+
+        lorieView = new LorieView(this);
+        lorieView.setScreenSize(xServer.screenInfo.width, xServer.screenInfo.height, "builtin");
+        // libXlorie defaults to GL_NEAREST, which mangles text whenever the X framebuffer is scaled
+        // to the surface by a non-integer factor (e.g. 1280x720 -> 1080x607 letterboxed). The old
+        // Java renderer sampled with GL_LINEAR (renderer/Texture.java), which is what the text looked
+        // like before; keep it that way.
+        lorieView.setFiltering(GLES20.GL_LINEAR);
+        lorieView.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        lorieView.setCallback(new LorieView.Callback() {
+            @Override
+            public void onConnectionChanged(boolean connected) {
+                if (!connected) Log.d("XServerDisplayActivity", "Xlorie event socket closed");
+            }
+
+            @Override
+            public void onViewportChanged(android.graphics.Rect viewport) {
+                // libXlorie only reports a viewport once it has actually pushed a frame into the
+                // surface, so this is the "container is really up" signal. The Java X server's
+                // WindowManager.onMapWindow no longer fires because Wine talks to libXlorie
+                // directly, which used to leave the preloader up forever, swallowing all touches.
+                if (viewport != null && viewport.width() > 0 && viewport.height() > 0) dismissPreloader();
+            }
+        });
+        rootView.addView(lorieView);
+        xServer.setLorieView(lorieView);
 
         globalCursorSpeed = preferences.getFloat("cursor_speed", 1.0f);
         capturePointerOnExternalMouse = preferences.getBoolean("capture_pointer_on_external_mouse", false);
@@ -739,6 +814,34 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         if (MainActivity.DEBUG_MODE) rootView.addView(AppUtils.createDebugMsgTextView(this));
         AppUtils.observeSoftKeyboardVisibility(drawerLayout, renderer::setScreenOffsetYRelativeToCursor);
+    }
+
+    /**
+     * Closes the "starting container" preloader exactly once. It must never block the UI forever:
+     * the dialog is a non-cancelable fullscreen overlay, so leaving it up means the user cannot
+     * touch anything at all and the activity looks frozen.
+     */
+    private synchronized void dismissPreloader() {
+        if (preloaderDismissed) return;
+        preloaderDismissed = true;
+        if (preloaderDialog != null) preloaderDialog.closeOnUiThread();
+    }
+
+    /**
+     * Safety net for {@link #dismissPreloader()}: if libXlorie never pushes a frame (Wine died,
+     * GPU driver failed, ...) the viewport callback never fires. Drop the overlay anyway so the
+     * drawer, keyboard and logs stay reachable instead of a dead loading spinner.
+     */
+    private void schedulePreloaderTimeout() {
+        final View rootView = findViewById(R.id.FLXServerDisplay);
+        if (rootView == null) return;
+        rootView.postDelayed(() -> {
+            if (!preloaderDismissed) {
+                Log.w("XServerDisplayActivity", "No frame from libXlorie yet, dismissing the preloader anyway");
+                dismissPreloader();
+                AppUtils.showToast(this, "X server produced no frame yet - check " + XlorieServerComponent.XSERVER_LOG_FILE_NAME);
+            }
+        }, PRELOADER_TIMEOUT_MS);
     }
 
     private void showInputControlsDialog() {

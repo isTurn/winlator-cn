@@ -498,15 +498,13 @@ public class TouchpadViewV3 extends View implements View.OnCapturedPointerListen
                 float scale = currDist / lastPinchDist;
                 if (Math.abs(scale - 1.0f) >= MIN_PINCH_SCALE_THRESHOLD) {
                     currentPinchZoom *= scale;
-                    xServer.getRenderer().setPinchZoom(currentPinchZoom, pinchCenterX, pinchCenterY);
-                } else if (currentPinchZoom > 1.0f) {
-                    // 双指平行移动：平移视口（仅在已缩放时生效，避免除以零）
-                    float panDx = -(finger1.x - finger1.lastX) / (2.0f * (currentPinchZoom - 1.0f));
-                    float panDy = -(finger1.y - finger1.lastY) / (2.0f * (currentPinchZoom - 1.0f));
-                    pinchCenterX += panDx;
-                    pinchCenterY += panDy;
-                    xServer.getRenderer().setPinchZoom(currentPinchZoom, pinchCenterX, pinchCenterY);
                 }
+                // libXlorie keeps the pixel that was under the fingers pinned to the pinch center, so
+                // feeding it the live center both zooms around the fingers and pans when they move
+                // together - no extra pan math is needed here.
+                pinchCenterX = (finger1.x + finger2.x) * 0.5f;
+                pinchCenterY = (finger1.y + finger2.y) * 0.5f;
+                xServer.getRenderer().setPinchZoom(currentPinchZoom, pinchCenterX, pinchCenterY);
             }
             lastPinchDist = currDist;
             scrolling = false;

@@ -34,5 +34,9 @@
     "wmdecoder" : {
         "dlnames": ["wmvcore", "wmasf", "wmadmod", "wmvdecod"],
         "restoreBuiltinDlls": true
+    },
+    "winmm" : {
+        "dlnames": ["winmm"],
+        "restoreBuiltinDlls": true
     }
 }

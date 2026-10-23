@@ -55,6 +55,29 @@ public abstract class ProcessHelper {
         Process.sendSignal(pid, OsConstants.SIGKILL);
     }
 
+    /**
+     * Sets a process-wide environment variable. The native X server (libXlorie) reads TMPDIR and
+     * XKB_CONFIG_ROOT with getenv() from its own native code, so they have to be exported before it
+     * starts; there is no pure-Java equivalent for that.
+     */
+    public static native void setEnv(String name, String value);
+
+    /**
+     * Points the process' stderr (fd 2) at the given file so the native X server's ErrorF()/
+     * FatalError() output survives the process, and mirrors it into logcat under the "XlorieNative"
+     * tag. dix prints the real reason a startup step failed there; without this it is written into a
+     * fd that nothing reads, and because libXlorie redefines exit()/abort() as _exit() the process
+     * dies silently. Call it right before starting the server; re-calling it switches files.
+     */
+    public static native void captureXServerStderr(String path);
+
+    /**
+     * Restores the calling thread's CPU affinity to every online core. libXlorie pins the thread that
+     * starts it to the upper half of the cores (it is meant to run as a standalone process), which
+     * would otherwise also pin winlator's UI thread.
+     */
+    public static native void resetCpuAffinity();
+
     public static int exec(String command) {
         return exec(command, null);
     }

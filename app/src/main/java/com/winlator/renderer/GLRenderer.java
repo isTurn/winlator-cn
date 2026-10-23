@@ -10,6 +10,7 @@ import android.opengl.GLSurfaceView;
 import androidx.core.graphics.ColorUtils;
 
 import com.winlator.R;
+import com.termux.x11.LorieView;
 import com.winlator.core.Bitmask;
 import com.winlator.core.Callback;
 import com.winlator.core.GPUHelper;
@@ -435,6 +436,11 @@ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindo
         this.pinchZoom = Mathf.clamp(pinchZoom, 1.0f, 4.0f);
         this.pinchAnchorX = anchorX;
         this.pinchAnchorY = anchorY;
+        // All the pixels now come from libXlorie into the LorieView surface, so this renderer only
+        // keeps the gesture state for the touchpad code to read back. The actual scaling has to go
+        // to the libXlorie renderer, otherwise the pinch changes nothing on screen.
+        final LorieView view = lorieView();
+        if (view != null) view.setPinchZoom(this.pinchZoom, anchorX, anchorY);
         xServerView.requestRender();
     }
 
@@ -442,7 +448,13 @@ public class GLRenderer implements GLSurfaceView.Renderer, WindowManager.OnWindo
         this.pinchZoom = 1.0f;
         this.pinchAnchorX = 0;
         this.pinchAnchorY = 0;
+        final LorieView view = lorieView();
+        if (view != null) view.resetPinchZoom();
         xServerView.requestRender();
+    }
+
+    private LorieView lorieView() {
+        return xServer != null ? xServer.getLorieView() : null;
     }
 
     public int[] getPixelsARGB(int x, int y, int width, int height, boolean flipY) {
