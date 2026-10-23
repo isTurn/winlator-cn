@@ -8,7 +8,11 @@ public class Box64Preset {
     public static final String INTERMEDIATE = "INTERMEDIATE";
     public static final String PERFORMANCE = "PERFORMANCE";
     public static final String CUSTOM = "CUSTOM";
-    public static final String DEFAULT = PERFORMANCE;
+    // Compatibility (兼容模式) is the safer default for a general purpose front end: the
+    // performance preset turns on fastnan/fastround, drops x87 to 64 bit precision and raises
+    // bigblock to 3, which breaks a fair number of older games with wrong math or hard crashes.
+    // Anyone who wants the extra speed can still pick it per container.
+    public static final String DEFAULT = CONSERVATIVE;
     public final String id;
     public final String name;
 

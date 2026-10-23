@@ -453,7 +453,13 @@ public class Container {
                 JSONObject extraData = data.getJSONObject("extraData");
                 int appVersion = Integer.parseInt(extraData.optString("appVersion", "0"));
 
-                if (appVersion < 16 && data.has("envVars")) {
+                // appVersion is only stamped the first time a container is launched. A container
+                // that was just created therefore has no appVersion yet, and reading the missing
+                // field as 0 made it look older than 16, so every default variable the user had
+                // deleted in the create dialog (DXVK_HUD, MANGOHUD, ...) was merged straight back
+                // in the next time the container was loaded. Only containers that actually
+                // recorded a version below 16 need the defaults filled in.
+                if (appVersion > 0 && appVersion < 16 && data.has("envVars")) {
                     EnvVars defaultEnvVars = new EnvVars(DEFAULT_ENV_VARS);
                     EnvVars envVars = new EnvVars(data.getString("envVars"));
                     for (String name : defaultEnvVars) if (!envVars.has(name)) envVars.put(name, defaultEnvVars.get(name));

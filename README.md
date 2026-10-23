@@ -44,6 +44,8 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - 任务管理器在 winhandler 未就绪时回退到本地 `/proc` 进程列表
 - 函数库新增 `winmm`，默认「原装先于内建」
 - 移除 libXlorie 的 stderr 落盘逻辑（`Download/WinlatorCN-XServer.txt`）
+- 修复新建容器时删掉的默认环境变量被迁移逻辑重新加回的问题（例如 `DXVK_HUD`）：从未启动过的容器没有记录 `appVersion`，被当成版本低于 16 的老容器而触发了默认值回填
+- Box64 预设默认从「性能模式」改为「兼容模式」，性能模式关掉了 NaN/舍入的精确处理，老游戏容易算错数值或直接崩溃
 
 **已知问题**
 
