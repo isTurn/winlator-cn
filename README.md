@@ -8,6 +8,50 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 本仓库用于存放 Winlator 应用源码的最新更新内容。
 如需了解更多信息及下载发行版，请访问：http://52emu.cn/wp/376.html
 
+# 更新日志
+
+## 11.2.cn.04
+
+显示后端从原来的纯 Java X 服务器实现换成 termux-x11 的 libXlorie（真正的 Xorg dix_main），补齐音视频解码器，并支持容器内输入法输入与剪贴板双向同步。
+
+**X 服务器后端**
+
+- 用 termux-x11 的 `libXlorie.so` 取代纯 Java X 服务器，X 协议由真 Xorg 处理
+- 新增 `LorieView` / `CmdEntryPoint` / `MainActivity` 三个 JNI 契约类，与 native 侧 28 条 `JNINativeMethod` 一一对齐
+- 新增 `XlorieServerComponent` 负责启动与复用；`dix_main` 是进程级单例，切换容器时复用已在运行的服务，只重建 X 连接
+- 修正 `-nolisten` 缺少前导短横导致 dix 报 `FatalError("Unrecognized option")` 的问题（native 侧把 `exit()` 换成了 `_exit()`，表现为进容器瞬间闪退、无任何堆栈）
+- 内置 xkb 数据，且必须包含 `geometry/`，否则 xkbcomp 报 `Can't find file "pc" for geometry include`
+
+**输入法与剪贴板**
+
+- `LorieView` 实现 `onCreateInputConnection` / `onCheckIsTextEditor`，输入法的组字与提交转成 `sendTextEvent`，退格等控制键转成 `sendKeyEvent`；中文拼音候选、手写、语音输入均可进容器
+- 弹软键盘时先把焦点交给 `LorieView`，焦点只在弹键盘时转移，不抢触控板的外部鼠标捕获
+- 注册 `OnPrimaryClipChangedListener`，剪贴板由单向变为双向（沿用 150ms 时间戳防回声）
+
+**内置 WFM 1.5-2.9**
+
+- 新增 `wfm.tzst` 资产，按版本戳覆盖 `rootfs_patches` 里的旧版本，老容器下次启动即生效，不需要重建容器
+
+**媒体解码**
+
+- 新增 `gst_codecs` 资产，补上 AC-3 / E-AC-3、Vorbis、Opus、FLAC、ADPCM 与 MPEG-TS 解封装。rootfs 里的 FFmpeg 是静态链接进 `libgstlibav.so` 的，构建时没开这些，含对应音轨的过场动画会直接没声音
+
+**体验修复**
+
+- 启动遮罩改由渲染视口回调关闭，修复容器起来后卡在「正在启动容器」且吃掉所有触摸
+- 纹理滤波 `GL_NEAREST` → `GL_LINEAR`，恢复文字观感
+- 双指缩放接到 libXlorie 的 `setRendererZoom` / `setZoomAnchor`
+- 任务管理器在 winhandler 未就绪时回退到本地 `/proc` 进程列表
+- 函数库新增 `winmm`，默认「原装先于内建」
+- 移除 libXlorie 的 stderr 落盘逻辑（`Download/WinlatorCN-XServer.txt`）
+
+**已知问题**
+
+- 起点菜单中部分选项首次显示不全，鼠标扫过才补上。已排除渲染/上传/damage 链路，剩余怀疑在 Wine 自身的菜单绘制与裁剪，尚未解决
+- 播放动画时画面上下翻转且无声音：把「函数库 → directsound」改成「内置 (Wine)」即可解决
+
+更早的版本改动与安装包见 [Releases](https://github.com/isTurn/winlator-cn/releases)。
+
 # 致谢与第三方项目
 - 原项目 https://github.com/brunodev85/winlator
 - GLIBC Patches by [Termux Pacman](https://github.com/termux-pacman/glibc-packages)
