@@ -45,8 +45,6 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - 按版本戳控制，只解压一次；解压失败只记警告，不影响启动
 - 代价是每个容器首次启动多解压约 90 MB
 
-> 说明：`container_addons.tzst` 体积约 40 MB，未纳入 git 仓库，随 [Releases](https://github.com/isTurn/winlator-cn/releases) 里的 APK 分发。从源码自行构建时需自备该文件放到 `app/src/main/assets/` 下；缺失时 `installContainerAddons` 只记一条警告并跳过，其余功能不受影响。
-
 **媒体解码**
 
 - 新增 `gst_codecs` 资产，补上 AC-3 / E-AC-3、Vorbis、Opus、FLAC、ADPCM 与 MPEG-TS 解封装。rootfs 里的 FFmpeg 是静态链接进 `libgstlibav.so` 的，构建时没开这些，含对应音轨的过场动画会直接没声音
