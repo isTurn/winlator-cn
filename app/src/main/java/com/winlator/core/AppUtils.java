@@ -103,7 +103,21 @@ public abstract class AppUtils {
     }
 
     public static void showKeyboard(AppCompatActivity activity) {
+        showKeyboard(activity, null);
+    }
+
+    /**
+     * Opens the soft keyboard.
+     *
+     * @param focusTarget when non-null it is focused first. The IME delivers keys to the focused
+     *                    view's InputConnection, so if the focused view has none (winlator keeps
+     *                    focus on its touchpad, which has no InputConnection) everything the
+     *                    keyboard types is silently dropped. Pass the LorieView to route typing
+     *                    into the guest.
+     */
+    public static void showKeyboard(AppCompatActivity activity, View focusTarget) {
         final InputMethodManager imm = (InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (focusTarget != null) focusTarget.requestFocus();
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.Q) {
             activity.getWindow().getDecorView().postDelayed(() -> imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0), 500L);
         }

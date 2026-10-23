@@ -1,13 +1,22 @@
 package com.termux.x11;
 
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Rect;
+import android.os.Build;
+import android.text.Editable;
+import android.text.InputType;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
 
 import androidx.annotation.Keep;
 
@@ -21,8 +30,10 @@ import dalvik.annotation.optimization.FastNative;
  *
  * This is a trimmed port of termux-x11's LorieView: it keeps the exact native contract (the 30
  * methods registered by activity.cpp in JNI_OnLoad, the "activity" field, resetIme() and the
- * clipboard/sync callbacks) but drops termux-x11's preference, IME and input-strategy stack, because
- * winlator owns input handling (XServer.inject*) and window management.
+ * clipboard/sync callbacks) and the IME glue (an InputConnection that turns IME commits into X key
+ * and text events, so soft keyboards and CJK input methods reach the guest), but drops termux-x11's
+ * preference and input-strategy stack, because winlator owns pointer/keyboard handling (XServer.inject*)
+ * and window management.
  *
  * Rendering: native code draws the X root window into this Surface through ANativeWindow, so a plain
  * SurfaceView is enough - there is no GL context here.
@@ -49,6 +60,7 @@ public class LorieView extends SurfaceView {
     private Callback callback;
     private long mNativeContext;
     private final ClipboardManager clipboard;
+    private final InputMethodManager imm;
 
     private int screenWidth = 1280;
     private int screenHeight = 1024;
@@ -60,10 +72,119 @@ public class LorieView extends SurfaceView {
     private boolean clipboardSyncEnabled;
     private long lastClipboardTimestamp;
 
+    private final ClipboardManager.OnPrimaryClipChangedListener clipboardListener = this::checkForClipboardChange;
+
+    /** Set while the IME has text committed to us that the X client may still be echoing back. */
+    private boolean imeCommittedText;
+
+    /**
+     * Turns IME output into X input. The connection deliberately reports no editable text: the
+     * authoritative buffer lives in the guest, so every commit is forwarded as key/text events
+     * (this is what termux-x11 does, and it is the only thing that works for CJK input methods).
+     */
+    private final InputConnection inputConnection = new BaseInputConnection(this, false) {
+        /** Length of the text the IME currently has composed, so it can be replaced on the next update. */
+        private int composingLength;
+
+        @Override
+        public Editable getEditable() {
+            return null;
+        }
+
+        @Override
+        public CharSequence getTextBeforeCursor(int length, int flags) {
+            return "";
+        }
+
+        @Override
+        public CharSequence getTextAfterCursor(int length, int flags) {
+            return "";
+        }
+
+        @Override
+        public boolean setComposingRegion(int start, int end) {
+            return true;
+        }
+
+        // The remaining BaseInputConnection methods would dereference the null Editable above on
+        // some IMEs, so they are answered here instead.
+        @Override
+        public CharSequence getSelectedText(int flags) {
+            return null;
+        }
+
+        @Override
+        public boolean setSelection(int start, int end) {
+            return true;
+        }
+
+        @Override
+        public int getCursorCapsMode(int reqModes) {
+            return 0;
+        }
+
+        /** Sends a single Android keycode; scan code 0 makes the native side map it from the keycode. */
+        private void sendKey(int keyCode) {
+            LorieView.this.sendKeyEvent(0, keyCode, true);
+            LorieView.this.sendKeyEvent(0, keyCode, false);
+        }
+
+        /** Removes the composing text the guest has already received, one BackSpace per character. */
+        private void deleteComposing() {
+            for (int i = 0; i < composingLength; i++) sendKey(KeyEvent.KEYCODE_DEL);
+            composingLength = 0;
+        }
+
+        private void commit(CharSequence text) {
+            deleteComposing();
+            if (text != null && text.length() > 0) {
+                sendTextEvent(text.toString().getBytes(StandardCharsets.UTF_8));
+                imeCommittedText = true;
+            }
+        }
+
+        @Override
+        public boolean setComposingText(CharSequence text, int newCursorPosition) {
+            deleteComposing();
+            if (text != null && text.length() > 0) {
+                sendTextEvent(text.toString().getBytes(StandardCharsets.UTF_8));
+                composingLength = text.length();
+                imeCommittedText = true;
+            }
+            return true;
+        }
+
+        @Override
+        public boolean finishComposingText() {
+            composingLength = 0;
+            return true;
+        }
+
+        @Override
+        public boolean commitText(CharSequence text, int newCursorPosition) {
+            commit(text);
+            return true;
+        }
+
+        @Override
+        public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+            for (int i = 0; i < beforeLength; i++) sendKey(KeyEvent.KEYCODE_DEL);
+            for (int i = 0; i < afterLength; i++) sendKey(KeyEvent.KEYCODE_FORWARD_DEL);
+            return true;
+        }
+
+        @Override
+        public boolean sendKeyEvent(KeyEvent event) {
+            return LorieView.this.sendKeyEvent(event.getScanCode(), event.getKeyCode(),
+                    event.getAction() == KeyEvent.ACTION_DOWN);
+        }
+    };
+
     public LorieView(Context context) {
         super(context);
         activity = new MainActivity();
         clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+        imm = (InputMethodManager) context.getSystemService(Context.INPUT_METHOD_SERVICE);
         setFocusable(true);
         setFocusableInTouchMode(true);
         getHolder().addCallback(surfaceCallback);
@@ -254,6 +375,49 @@ public class LorieView extends SurfaceView {
     public void setClipboardSyncEnabled(boolean enabled) {
         clipboardSyncEnabled = enabled;
         if (mNativeContext != 0) setClipboardSyncEnabled(mNativeContext, enabled, enabled);
+        if (clipboard != null) {
+            clipboard.removePrimaryClipChangedListener(clipboardListener);
+            if (enabled) {
+                clipboard.addPrimaryClipChangedListener(clipboardListener);
+                // Pick up whatever the user copied before we started listening.
+                checkForClipboardChange();
+            }
+        }
+    }
+
+    /**
+     * Announces the Android clipboard to the X server when it changed since the last sync.
+     *
+     * The X server answers with requestClipboard(), so the actual text transfer stays pull-based.
+     * Our own writes (setClipboardText) bump lastClipboardTimestamp into the future so they do not
+     * bounce back into the guest.
+     */
+    private void checkForClipboardChange() {
+        if (clipboard == null || !clipboardSyncEnabled) return;
+        ClipDescription description = clipboard.getPrimaryClipDescription();
+        if (description == null) return;
+        long timestamp = description.getTimestamp();
+        if (lastClipboardTimestamp >= timestamp) return;
+        if (description.getMimeTypeCount() != 1) return;
+        if (!description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) &&
+            !description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)) return;
+        lastClipboardTimestamp = timestamp;
+        if (mNativeContext != 0) sendClipboardAnnounce(mNativeContext);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // Deliberately no requestFocus() here: winlator's touchpads request focus (and pointer
+        // capture) on their own, and stealing it would break pointer capture. Focus is handed to
+        // this view only right before the soft keyboard is shown, via
+        // AppUtils.showKeyboard(activity, lorieView).
+        if (clipboard == null) return;
+        clipboard.removePrimaryClipChangedListener(clipboardListener);
+        if (hasFocus && clipboardSyncEnabled) {
+            clipboard.addPrimaryClipChangedListener(clipboardListener);
+            checkForClipboardChange();
+        }
     }
 
     /** Native callback: the X server wants to put text into the Android clipboard. */
@@ -295,6 +459,30 @@ public class LorieView extends SurfaceView {
     @Keep
     @SuppressWarnings("unused")
     void resetIme() {
+        if (!imeCommittedText) return;
+        imeCommittedText = false;
+        // Restarting the input drops the IME's composing buffer, which is stale as soon as the guest
+        // moved focus. The short delay lets the current batch of key events reach the guest first.
+        postDelayed(() -> {
+            if (imm == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) imm.invalidateInput(this);
+            else imm.restartInput(this);
+        }, 10);
+    }
+
+    @Override
+    public boolean onCheckIsTextEditor() {
+        return true;
+    }
+
+    @Override
+    public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+        // Plain text, and deliberately no TYPE_TEXT_FLAG_NO_SUGGESTIONS: Chinese IMEs need the
+        // candidate bar, and suppressing suggestions makes several of them fall back to raw keys.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT;
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN;
+        outAttrs.actionLabel = "\u21B5";
+        return inputConnection;
     }
 
     /** Native callback: the rectangle the renderer actually drew into. */

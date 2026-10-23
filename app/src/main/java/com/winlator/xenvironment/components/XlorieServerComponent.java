@@ -1,6 +1,5 @@
 package com.winlator.xenvironment.components;
 
-import android.os.Environment;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
@@ -56,11 +55,11 @@ public class XlorieServerComponent extends EnvironmentComponent {
     private static final String GST_STAMP = "/usr/lib/gstreamer-1.0/.winlator-gst-codecs";
     private static final String GST_STAMP_VERSION = "1";
 
-    /**
-     * Every ErrorF()/FatalError() from dix is on stderr, and libXlorie turns exit() into _exit(), so
-     * when the server dies during startup this file is the only place that says why.
-     */
-    public static final String XSERVER_LOG_FILE_NAME = "WinlatorCN-XServer.txt";
+    private static final String WFM_ASSET = "wfm.tzst";
+    private static final String WFM_PATH = "/home/xuser/.wine/drive_c/windows/wfm.exe";
+    private static final String WFM_STAMP = "/home/xuser/.wine/drive_c/windows/.winlator-wfm";
+    /** Bumped whenever wfm.tzst changes, so containers created earlier pick the new build up too. */
+    private static final String WFM_STAMP_VERSION = "1.5-2.9";
 
     /**
      * There is exactly one native X server per process: dix_main is a singleton, the lock file is
@@ -131,17 +130,13 @@ public class XlorieServerComponent extends EnvironmentComponent {
 
         installXkbData(rootDir);
         installMediaPlugins(rootDir);
+        installWfm(rootDir);
 
         // The native server reads these through getenv() in its own process, so they have to be set
         // with setenv() rather than in the guest program's env var list.
         ProcessHelper.setEnv("TMPDIR", tmpDir.getPath());
         ProcessHelper.setEnv("XKB_CONFIG_ROOT", rootDir.getPath()+XKB_DIR);
         Log.d(TAG, "TMPDIR="+tmpDir+" XKB_CONFIG_ROOT="+rootDir+XKB_DIR);
-
-        // dix reports startup failures on stderr and then kills the process through its overridden
-        // _exit(), so the fd has to point at a file we can read afterwards, otherwise the only
-        // visible symptom is "the app closed".
-        ProcessHelper.captureXServerStderr(getXServerLogFile().getAbsolutePath());
 
         // The argv handed to dix_main. Every single token is parsed by dix's ProcessCommandLine,
         // and an unknown one is a hard FatalError -> exit() -> here even _exit() because
@@ -270,13 +265,32 @@ public class XlorieServerComponent extends EnvironmentComponent {
     }
 
     /**
-     * Where the native server's stderr ends up. Same folder as the other crash logs so everything a
-     * bug report needs sits in one place, and readable without adb (Download is public storage).
+     * Installs the bundled WFM file manager into the container's wineprefix.
+     *
+     * Wine's own explorer is what winlator uses as its shell, and WFM replaces the file dialogs and
+     * the desktop window, so the build that ships with the app has to win over whatever an older
+     * container already has on disk. The stamp keeps this a one-off per container instead of
+     * rewriting a 540 KB binary on every launch.
      */
-    private static File getXServerLogFile() {
-        File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        if (!dir.isDirectory()) dir.mkdirs();
-        return new File(dir, XSERVER_LOG_FILE_NAME);
+    private void installWfm(File rootDir) {
+        File stamp = new File(rootDir, WFM_STAMP);
+        if (WFM_STAMP_VERSION.equals(readStampFile(stamp))) return;
+
+        File target = new File(rootDir, WFM_PATH);
+        File parent = target.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            Log.w(TAG, "Could not create " + parent + ", skipping the bundled WFM");
+            return;
+        }
+
+        if (!TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, environment.getContext(), WFM_ASSET, rootDir)) {
+            // Not fatal: the container keeps the wfm.exe that rootfs_patches.tzst provided.
+            Log.w(TAG, "Failed to extract " + WFM_ASSET);
+            return;
+        }
+
+        Log.d(TAG, "Installed bundled WFM " + WFM_STAMP_VERSION + " at " + target);
+        FileUtils.writeString(stamp, WFM_STAMP_VERSION);
     }
 
     private void installXkbData(File rootDir) {

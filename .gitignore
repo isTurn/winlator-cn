@@ -19,3 +19,6 @@ local.properties
 /app-release-*.apk
 /WinlatorCN-logcat.txt
 /grab-logcat.sh
+
+# Gradle/Android Studio 崩溃时产生的堆转储（单个可达数百 MB，绝不入库）
+*.hprof

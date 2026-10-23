@@ -760,7 +760,10 @@ public class InputControlsView extends View {
                 if (isActionDown && touchpadView != null) touchpadView.setSwapMouseButtons();
             }
             else if (binding == Binding.MOUSE_SHOW_INPUT_METHOD) {
-                if (isActionDown) AppUtils.showKeyboard((AppCompatActivity)getContext());
+                // The keyboard only reaches the guest if the LorieView (the view that owns the IME
+                // InputConnection) holds focus; the touchpad holds it otherwise.
+                if (isActionDown) AppUtils.showKeyboard((AppCompatActivity)getContext(),
+                        xServer != null ? xServer.getLorieView() : null);
             }
             else if (binding.keycode.isCustomKey()) {
                 if (!isActionDown) handleCommandKeyEvent(binding);

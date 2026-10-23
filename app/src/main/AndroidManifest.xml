@@ -46,6 +46,7 @@
             android:supportsPictureInPicture="true"
             android:launchMode="singleTask"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|navigation"
+            android:windowSoftInputMode="adjustResize|stateHidden"
             android:screenOrientation="sensorLandscape" />
 
         <activity android:name="com.winlator.ShortcutLauncherActivity"

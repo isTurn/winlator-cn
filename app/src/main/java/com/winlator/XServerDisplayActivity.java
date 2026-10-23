@@ -448,7 +448,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         final GLRenderer renderer = xServerView.getRenderer();
         switch (item.getItemId()) {
             case R.id.menu_item_keyboard:
-                AppUtils.showKeyboard(this);
+                AppUtils.showKeyboard(this, lorieView);
                 drawerLayout.closeDrawers();
                 break;
             case R.id.menu_item_input_controls:
@@ -839,7 +839,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             if (!preloaderDismissed) {
                 Log.w("XServerDisplayActivity", "No frame from libXlorie yet, dismissing the preloader anyway");
                 dismissPreloader();
-                AppUtils.showToast(this, "X server produced no frame yet - check " + XlorieServerComponent.XSERVER_LOG_FILE_NAME);
+                AppUtils.showToast(this, "X server produced no frame yet");
             }
         }, PRELOADER_TIMEOUT_MS);
     }

@@ -18,6 +18,7 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - VKD3D ([gitlab.winehq.org/wine/vkd3d](https://gitlab.winehq.org/wine/vkd3d))
 - CNC DDraw ([github.com/FunkyFr3sh/cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw))
 - RootFS & WFM by [Waim908](https://github.com/Waim908)
+- WFM 文件管理器 [Waim908/wfm](https://github.com/Waim908/wfm)（内置版本 1.5-2.9）
 - termux-x11 by [Termux](https://github.com/termux/termux-x11)（X 服务器后端 libXlorie）
 
 特别感谢所有参与这些项目的开发者。<br>
