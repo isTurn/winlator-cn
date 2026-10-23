@@ -138,6 +138,13 @@ public class XlorieServerComponent extends EnvironmentComponent {
         ProcessHelper.setEnv("XKB_CONFIG_ROOT", rootDir.getPath()+XKB_DIR);
         Log.d(TAG, "TMPDIR="+tmpDir+" XKB_CONFIG_ROOT="+rootDir+XKB_DIR);
 
+        // libXlorie decodes IME text with mbrtowc(); bionic's default "C" locale stops at ASCII and
+        // silently drops every CJK character. The locale is process wide, so fixing it here also
+        // fixes the copy inside libXlorie.
+        final int mbCurMax = ProcessHelper.setUtf8Locale();
+        if (mbCurMax > 1) Log.d(TAG, "UTF-8 locale installed, MB_CUR_MAX="+mbCurMax);
+        else Log.w(TAG, "Could not install a UTF-8 locale, MB_CUR_MAX="+mbCurMax+"; only ASCII text can be typed");
+
         // The argv handed to dix_main. Every single token is parsed by dix's ProcessCommandLine,
         // and an unknown one is a hard FatalError -> exit() -> here even _exit() because
         // cmdentrypoint.cpp overrides exit(), i.e. the whole app disappears with no Java stack.

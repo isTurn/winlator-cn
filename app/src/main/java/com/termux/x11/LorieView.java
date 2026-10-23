@@ -47,6 +47,15 @@ public class LorieView extends SurfaceView {
     public static final int BUTTON_RIGHT = 3;
     public static final int BUTTON_SCROLL = 4;
 
+    /**
+     * Delay before Ctrl+V after the clipboard was handed to the X server, and the gap between the
+     * individual key events. Same values as upstream winlator-cn's E02_KeyInput: Wine needs the
+     * selection owner to be established before it reacts to the shortcut, and it drops a Ctrl+V whose
+     * events arrive back to back.
+     */
+    private static final long PASTE_CLIPBOARD_SETTLE_MS = 200;
+    private static final long PASTE_KEY_GAP_MS = 50;
+
     /** Required by libXlorie.so: GetFieldID(LorieView, "activity", "Lcom/termux/x11/MainActivity;"). */
     public MainActivity activity;
 
@@ -83,8 +92,13 @@ public class LorieView extends SurfaceView {
      * (this is what termux-x11 does, and it is the only thing that works for CJK input methods).
      */
     private final InputConnection inputConnection = new BaseInputConnection(this, false) {
-        /** Length of the text the IME currently has composed, so it can be replaced on the next update. */
-        private int composingLength;
+        /**
+         * Last payload handed to setComposingText(). It is deliberately not sent to the guest while
+         * the IME is still composing: see finishComposingText().
+         */
+        private CharSequence composingText;
+        /** True once {@link #composingText} has already been sent from finishComposingText(). */
+        private boolean composingEmitted;
 
         @Override
         public Editable getEditable() {
@@ -129,40 +143,67 @@ public class LorieView extends SurfaceView {
             LorieView.this.sendKeyEvent(0, keyCode, false);
         }
 
-        /** Removes the composing text the guest has already received, one BackSpace per character. */
-        private void deleteComposing() {
-            for (int i = 0; i < composingLength; i++) sendKey(KeyEvent.KEYCODE_DEL);
-            composingLength = 0;
+        private void emitText(CharSequence text) {
+            if (text == null || text.length() == 0) return;
+            final String value = text.toString();
+            imeCommittedText = true;
+            // Same split as the upstream winlator-cn implementation (com.ewt45.winlator.E02_KeyInput):
+            // pure ASCII is safe to type key by key, everything else goes through the clipboard and a
+            // Ctrl+V. Typing CJK as X keysyms means asking the server to invent a keycode for every
+            // new character, and Wine only re-reads the keymap at startup, so after the first handful
+            // of characters the keys stop producing text - which is exactly the "some characters
+            // cannot be typed at all" report.
+            if (isAsciiOnly(value)) sendTextEvent(value.getBytes(StandardCharsets.UTF_8));
+            else pasteText(value);
         }
 
-        private void commit(CharSequence text) {
-            deleteComposing();
-            if (text != null && text.length() > 0) {
-                sendTextEvent(text.toString().getBytes(StandardCharsets.UTF_8));
-                imeCommittedText = true;
-            }
-        }
-
-        @Override
-        public boolean setComposingText(CharSequence text, int newCursorPosition) {
-            deleteComposing();
-            if (text != null && text.length() > 0) {
-                sendTextEvent(text.toString().getBytes(StandardCharsets.UTF_8));
-                composingLength = text.length();
-                imeCommittedText = true;
-            }
+        private boolean isAsciiOnly(String value) {
+            for (int i = 0; i < value.length(); i++) if (value.charAt(i) > 0x7F) return false;
             return true;
         }
 
+        /**
+         * While a Chinese IME is composing, the payload is the pinyin the user has typed so far
+         * ("n", "ni", "nih", ...). termux-x11 pushes that to the X server and removes it again with
+         * one BackSpace per character on the next update, but against a Wine application that is
+         * actively harmful: every BackSpace is an ordinary keystroke delivered to whatever widget
+         * has focus, so a single character the guest failed to insert (a filtered field, a dialog
+         * that just opened, a slow frame) makes the following BackSpace eat real text. That is what
+         * showed up as "some characters cannot be typed at all".
+         *
+         * Nothing is emitted here. The IME's own candidate window already shows the composition,
+         * and the final text is sent once, from commitText().
+         */
+        @Override
+        public boolean setComposingText(CharSequence text, int newCursorPosition) {
+            composingText = text;
+            composingEmitted = false;
+            return true;
+        }
+
+        /**
+         * Some IMEs never call commitText() and rely on this call to make the composition real, so
+         * the last composing payload is sent here. commitText() then suppresses a duplicate.
+         */
         @Override
         public boolean finishComposingText() {
-            composingLength = 0;
+            if (composingText != null && composingText.length() > 0) {
+                emitText(composingText);
+                composingEmitted = true;
+            }
+            else {
+                composingEmitted = false;
+            }
             return true;
         }
 
         @Override
         public boolean commitText(CharSequence text, int newCursorPosition) {
-            commit(text);
+            final boolean alreadySent = composingEmitted && composingText != null && text != null &&
+                    composingText.toString().equals(text.toString());
+            composingText = null;
+            composingEmitted = false;
+            if (!alreadySent) emitText(text);
             return true;
         }
 
@@ -412,12 +453,57 @@ public class LorieView extends SurfaceView {
         // capture) on their own, and stealing it would break pointer capture. Focus is handed to
         // this view only right before the soft keyboard is shown, via
         // AppUtils.showKeyboard(activity, lorieView).
-        if (clipboard == null) return;
-        clipboard.removePrimaryClipChangedListener(clipboardListener);
-        if (hasFocus && clipboardSyncEnabled) {
-            clipboard.addPrimaryClipChangedListener(clipboardListener);
-            checkForClipboardChange();
+        //
+        // The clipboard listener is NOT tied to focus either. In this app focus legitimately moves
+        // to the touchpad while the X server keeps running, and unregistering on every focus loss
+        // made the guest paste stale text (it looked like truncated or wrong content). The listener
+        // stays registered for as long as clipboard sync is enabled; setClipboardSyncEnabled()
+        // owns its lifetime. Focus changes only trigger a re-check, so a copy made while another
+        // view held focus is still picked up.
+        if (hasFocus && clipboardSyncEnabled) checkForClipboardChange();
+    }
+
+    /**
+     * Types text that cannot be delivered as X keysyms by putting it on the X clipboard and pressing
+     * Ctrl+V in the guest.
+     *
+     * This mirrors the upstream winlator-cn implementation (E02_KeyInput.doPaste), which switched to
+     * clipboard pasting precisely because per-character keysym injection is unreliable for CJK. The
+     * clipboard is owned by the X server here, so the pull-based requestClipboard() handshake
+     * supplies the text and no WinHandler round trip is needed.
+     */
+    private void pasteText(String text) {
+        if (mNativeContext == 0) return;
+        if (clipboard == null) {
+            // No clipboard service at all: fall back to the old behaviour rather than dropping input.
+            sendTextEvent(text.getBytes(StandardCharsets.UTF_8));
+            return;
         }
+        try {
+            // Bumped before the write so the primary-clip listener (which fires synchronously from
+            // setPrimaryClip) does not announce a second time.
+            lastClipboardTimestamp = System.currentTimeMillis() + 150;
+            clipboard.setPrimaryClip(ClipData.newPlainText("X11", text));
+        }
+        catch (Exception e) {
+            Log.w(TAG, "pasteText: could not set the clipboard", e);
+            sendTextEvent(text.getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        sendClipboardAnnounce(mNativeContext);
+        postDelayed(this::injectCtrlV, PASTE_CLIPBOARD_SETTLE_MS);
+    }
+
+    private void injectCtrlV() {
+        if (mNativeContext == 0) return;
+        sendKeyEvent(0, KeyEvent.KEYCODE_CTRL_LEFT, true);
+        postDelayed(() -> {
+            sendKeyEvent(0, KeyEvent.KEYCODE_V, true);
+            postDelayed(() -> {
+                sendKeyEvent(0, KeyEvent.KEYCODE_V, false);
+                postDelayed(() -> sendKeyEvent(0, KeyEvent.KEYCODE_CTRL_LEFT, false), PASTE_KEY_GAP_MS);
+            }, PASTE_KEY_GAP_MS);
+        }, PASTE_KEY_GAP_MS);
     }
 
     /** Native callback: the X server wants to put text into the Android clipboard. */

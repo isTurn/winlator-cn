@@ -69,6 +69,18 @@ public abstract class ProcessHelper {
      */
     public static native void resetCpuAffinity();
 
+    /**
+     * Switches the process to a UTF-8 locale and returns the resulting {@code MB_CUR_MAX}.
+     *
+     * <p>libXlorie decodes the text it receives from the IME with {@code mbrtowc()}, and bionic's
+     * default "C" locale cannot decode anything above ASCII ({@code MB_CUR_MAX == 1}), which makes
+     * every non-ASCII character fail with "Invalid UTF-8 sequence" and get dropped. The locale is
+     * per process, so setting it here also fixes the code inside libXlorie.
+     *
+     * @return 4 when a UTF-8 locale was installed, 1 when it did not work (ASCII still works)
+     */
+    public static native int setUtf8Locale();
+
     public static int exec(String command) {
         return exec(command, null);
     }

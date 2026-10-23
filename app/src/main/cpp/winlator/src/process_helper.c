@@ -3,6 +3,7 @@
 
 #include <jni.h>
 
+#include <locale.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -44,4 +45,21 @@ JNIEXPORT void JNICALL Java_com_winlator_core_ProcessHelper_setEnv(JNIEnv* env, 
     }
 
     (*env)->ReleaseStringUTFChars(env, name, nameChars);
+}
+
+// libXlorie turns the IME text into X input by calling mbrtowc() on the UTF-8 bytes it is handed
+// (sendTextEvent in activity.cpp). Bionic's default "C" locale has MB_CUR_MAX == 1, so mbrtowc()
+// reports every multi-byte sequence as incomplete, the conversion loop bails out on its first
+// non-ASCII character, and CJK input silently produces nothing. The locale is process wide and
+// bionic keeps a single copy of it, so switching it here also fixes the code inside libXlorie.
+//
+// Returns the resulting MB_CUR_MAX so the Java side can tell whether it actually worked.
+JNIEXPORT jint JNICALL Java_com_winlator_core_ProcessHelper_setUtf8Locale(JNIEnv* env, jclass obj) {
+    static const char* candidates[] = {"C.UTF-8", "en_US.UTF-8", "C.utf8", ""};
+
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(*candidates); i++) {
+        if (setlocale(LC_ALL, candidates[i]) != NULL) break;
+    }
+
+    return (jint) MB_CUR_MAX;
 }

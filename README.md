@@ -24,9 +24,12 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 
 **输入法与剪贴板**
 
-- `LorieView` 实现 `onCreateInputConnection` / `onCheckIsTextEditor`，输入法的组字与提交转成 `sendTextEvent`，退格等控制键转成 `sendKeyEvent`；中文拼音候选、手写、语音输入均可进容器
+- `LorieView` 实现 `onCreateInputConnection` / `onCheckIsTextEditor`，输入法的提交与退格等控制键接到 libXlorie
+- 进程内装 UTF-8 locale（`setUtf8Locale`）。bionic 默认是 `"C"`，`MB_CUR_MAX` 只有 1，native 的 `sendTextEvent` 用 `mbrtowc` 解 UTF-8 时遇到 3 字节的汉字直接判为非法序列并中止，中文一个字都发不出去
+- 非 ASCII 文本改走「剪贴板 + `Ctrl+V`」粘贴，与上游 winlator-cn 的 `E02_KeyInput` 一致；纯 ASCII 仍逐字符注入。原因是逐字注入要靠 X 服务器给每个新字符临时分配 keycode，而 Wine 只在启动时读一次键盘映射，超出首批字符后就不再产生文字，表现为「有些字打不进去」
+- 组字（拼音）阶段不向容器输出，只在提交时发一次，避免用退格回删拼音时吃掉容器里的真实内容
 - 弹软键盘时先把焦点交给 `LorieView`，焦点只在弹键盘时转移，不抢触控板的外部鼠标捕获
-- 注册 `OnPrimaryClipChangedListener`，剪贴板由单向变为双向（沿用 150ms 时间戳防回声）
+- 注册 `OnPrimaryClipChangedListener`，剪贴板由单向变为双向（沿用 150ms 时间戳防回声），监听不随窗口焦点摘除
 
 **内置 WFM 1.5-2.9**
 
