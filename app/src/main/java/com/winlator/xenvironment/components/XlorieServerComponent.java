@@ -63,35 +63,11 @@ public class XlorieServerComponent extends EnvironmentComponent {
     private static final String WFM_STAMP_VERSION = "1.5-2.9";
 
     /**
-     * Runtime pieces that wine normally downloads on demand (wine-mono, wine-gecko) or that a
-     * Windows box would have preinstalled. Everything here lives in the shared rootfs, so it is
-     * unpacked once for all containers.
-     *
-     * wine-mono: .NET applications. Without it every .NET app dies with "cannot find Mono".
-     * wine-gecko: the embedded MSHTML, needed by anything hosting the IE control.
-     * JRE 17: a Windows Java runtime for the Minecraft-style launchers, at Z:\opt\java\jre17.
-     */
-    private static final String MONO_ASSET = "wine-mono.tzst";
-    private static final String MONO_STAMP = "/opt/wine/share/wine/mono/.winlator-mono";
-    private static final String MONO_STAMP_VERSION = "10.4.1";
-
-    // Split per architecture: the combined gecko tarball is 108 MB, above GitHub's 100 MB
-    // per-file limit for git objects.
-    private static final String GECKO_ASSET_X86 = "wine-gecko-x86.tzst";
-    private static final String GECKO_ASSET_X86_64 = "wine-gecko-x86_64.tzst";
-    private static final String GECKO_DIR = "/opt/wine/share/wine/gecko";
-    private static final String GECKO_STAMP_VERSION = "2.47.4";
-
-    private static final String JRE_ASSET = "jre.tzst";
-    private static final String JRE_STAMP = "/opt/java/.winlator-jre";
-    private static final String JRE_STAMP_VERSION = "17";
-
-    /**
      * Per-container payload unpacked straight into the wineprefix drive_c: the CJK fonts Windows
-     * has and wine does not, the VC++ 2015-2022 / d3dx9 / OpenAL runtimes most games import, and
-     * the legacy PhysX 2.x runtimes. These are per container because drive_c is per container;
-     * /home/xuser is a symlink to the active container (ContainerManager.activateContainer), so the
-     * paths below resolve to whichever container is starting right now.
+     * has and wine does not, plus the VC++ 2015-2022 / d3dx9 / OpenAL runtimes most games import.
+     * These are per container because drive_c is per container; /home/xuser is a symlink to the
+     * active container (ContainerManager.activateContainer), so the paths below resolve to
+     * whichever container is starting right now.
      */
     private static final String ADDONS_ASSET = "container_addons.tzst";
     private static final String ADDONS_DRIVE_C = "/home/xuser/.wine/drive_c";
@@ -170,7 +146,6 @@ public class XlorieServerComponent extends EnvironmentComponent {
         installXkbData(rootDir);
         installMediaPlugins(rootDir);
         installWfm(rootDir);
-        installWineAddons(rootDir);
         installContainerAddons(rootDir);
 
         // The native server reads these through getenv() in its own process, so they have to be set
@@ -341,41 +316,11 @@ public class XlorieServerComponent extends EnvironmentComponent {
         FileUtils.writeString(stamp, WFM_STAMP_VERSION);
     }
 
-    /** Unpacks wine-mono / wine-gecko / the Windows JRE into the shared rootfs. */
-    private void installWineAddons(File rootDir) {
-        installRootfsAsset(rootDir, MONO_ASSET, MONO_STAMP, MONO_STAMP_VERSION, "wine-mono");
-        installRootfsAsset(rootDir, GECKO_ASSET_X86, GECKO_DIR+"/.winlator-gecko-x86",
-                GECKO_STAMP_VERSION, "wine-gecko (32-bit)");
-        installRootfsAsset(rootDir, GECKO_ASSET_X86_64, GECKO_DIR+"/.winlator-gecko-x86_64",
-                GECKO_STAMP_VERSION, "wine-gecko (64-bit)");
-        installRootfsAsset(rootDir, JRE_ASSET, JRE_STAMP, JRE_STAMP_VERSION, "Windows JRE");
-    }
-
-    /**
-     * One-off extraction of a rootfs-relative asset. Failure only costs the feature, never the
-     * boot: a missing asset file returns false from TarCompressorUtils instead of throwing.
-     */
-    private void installRootfsAsset(File rootDir, String asset, String stampPath, String version, String label) {
-        File stamp = new File(rootDir, stampPath);
-        if (version.equals(readStampFile(stamp))) return;
-
-        if (!TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, environment.getContext(), asset, rootDir)) {
-            Log.w(TAG, "Failed to extract "+asset+", skipping the bundled "+label);
-            return;
-        }
-
-        File parent = stamp.getParentFile();
-        if (parent != null && !parent.isDirectory()) parent.mkdirs();
-        FileUtils.writeString(stamp, version);
-        Log.d(TAG, "Installed bundled "+label+" "+version);
-    }
-
     /**
      * Unpacks the fonts and runtimes into the current container's drive_c and registers them.
      *
      * The fonts need registry entries under ...\CurrentVersion\Fonts, exactly like the Wine core
-     * fonts that WineUtils writes, otherwise GDI never enumerates them. PhysX is registered in both
-     * registry views because 32-bit games read the Wow6432Node copy.
+     * fonts that WineUtils writes, otherwise GDI never enumerates them.
      */
     private void installContainerAddons(File rootDir) {
         File driveC = new File(rootDir, ADDONS_DRIVE_C);
@@ -393,7 +338,6 @@ public class XlorieServerComponent extends EnvironmentComponent {
         }
 
         registerBundledFonts(rootDir);
-        registerPhysX(rootDir);
 
         FileUtils.writeString(stamp, ADDONS_STAMP_VERSION);
         Log.d(TAG, "Installed bundled container addons into "+driveC);
@@ -417,35 +361,6 @@ public class XlorieServerComponent extends EnvironmentComponent {
         }
         catch (Exception e) {
             Log.w(TAG, "Could not register the bundled CJK fonts", e);
-        }
-    }
-
-    private void registerPhysX(File rootDir) {
-        File systemRegFile = new File(rootDir, WINEPREFIX_DIR+"/system.reg");
-        if (!systemRegFile.isFile()) return;
-
-        // PhysXLoader.dll looks the engines up under ...\NVIDIA Corporation\PhysX\Runtimes\<version>;
-        // the paths are the ones the legacy installer writes.
-        final String physxRoot = "C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX";
-        final String[] engines = {"v2.7.1", "v2.7.3", "v2.7.4", "v2.7.5", "v2.7.6", "v2.8.0", "v2.8.1", "v2.8.3"};
-        final String[] views = {"Software", "Software\\Wow6432Node"};
-
-        try (WineRegistryEditor registryEditor = new WineRegistryEditor(systemRegFile)) {
-            for (String view : views) {
-                for (String engine : engines) {
-                    String key = view+"\\NVIDIA Corporation\\PhysX\\Runtimes\\"+engine;
-                    registryEditor.setStringValue(key, "PhysXCore", physxRoot+"\\Engine\\"+engine+"\\PhysXCore.dll");
-                    registryEditor.setStringValue(key, "PhysXCooking", physxRoot+"\\Engine\\"+engine+"\\PhysXCooking.dll");
-                    registryEditor.setStringValue(key, "PhysXDevice", physxRoot+"\\Common\\PhysXDevice.dll");
-                    registryEditor.setStringValue(key, "PhysXLoader", physxRoot+"\\Common\\PhysXLoader.dll");
-                }
-                String systemKey = view+"\\NVIDIA Corporation\\PhysX_SystemSoftware";
-                registryEditor.setStringValue(systemKey, "PhysXCore Path", physxRoot+"\\Engine");
-                registryEditor.setStringValue(systemKey, "PhysX (GPU) Version", "2.8.3");
-            }
-        }
-        catch (Exception e) {
-            Log.w(TAG, "Could not register the bundled PhysX runtimes", e);
         }
     }
 
