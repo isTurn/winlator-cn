@@ -12,7 +12,7 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 
 ## 11.2.cn.04
 
-显示后端从原来的纯 Java X 服务器实现换成 termux-x11 的 libXlorie（真正的 Xorg dix_main），补齐音视频解码器，并支持容器内输入法输入与剪贴板双向同步。
+显示后端从原来的纯 Java X 服务器实现换成 termux-x11 的 libXlorie（真正的 Xorg dix_main），补齐音视频解码器，支持容器内输入法输入与剪贴板双向同步，并内置了常用运行库与中文字体。
 
 **X 服务器后端**
 
@@ -34,6 +34,21 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 **内置 WFM 1.5-2.9**
 
 - 新增 `wfm.tzst` 资产，按版本戳覆盖 `rootfs_patches` 里的旧版本，老容器下次启动即生效，不需要重建容器
+
+**内置运行时、字体与图形运行库**
+
+- 新增 `wine-mono.tzst`（10.4.1）与 `wine-gecko-x86` / `wine-gecko-x86_64.tzst`（2.47.4），放在 `Z:\opt\wine\share\wine\` 下。Wine 需要时会直接从本地安装进容器，不再联网下载
+- 新增 `jre.tzst`（Temurin 17），路径 `Z:\opt\java\jre17`，Minecraft 这类需要自带 Java 的启动器可以直接调用 `Z:\opt\java\jre17\bin\java.exe`
+- 新增 `container_addons.tzst`，首次进入某个容器时解压到该容器的 `drive_c`，内容包括：
+  - VC++ 2015-2022 运行库（`vcruntime140` / `msvcp140` 系列 / `concrt140`，32 位与 64 位各一套）
+  - `d3dx9_43` / `d3dx9_42` / `d3dcompiler_43`（32 位与 64 位）
+  - OpenAL Soft 1.24.2，作为 `OpenAL32.dll` 放进 `system32` 与 `syswow64`
+  - 中文字体：微软雅黑、雅黑粗体、黑体、楷体、仿宋，并写入 `...\CurrentVersion\Fonts` 注册表项，否则 GDI 不会枚举到它们
+  - PhysX 2.x 运行时（v2.7.1 至 v2.8.3 共 8 个引擎 + Common），注册表同时写 `Software` 与 `Software\Wow6432Node` 两个视图，32 位游戏读的是后者
+- 全部按版本戳控制，只解压一次；解压失败只记警告，不影响启动
+- 代价是首次启动变慢：rootfs 侧约 220 MB，每个容器首次启动再解压约 148 MB；APK 体积因此增大到约 500 MB
+
+> 说明：`wine-mono.tzst`、`wine-gecko-x86.tzst`、`wine-gecko-x86_64.tzst`、`jre.tzst`、`container_addons.tzst` 五个资产体积合计约 270 MB，未纳入 git 仓库，随 [Releases](https://github.com/isTurn/winlator-cn/releases) 里的 APK 分发。从源码自行构建时需自备这些文件放到 `app/src/main/assets/` 下；缺失时 `installRootfsAsset` / `installContainerAddons` 只记一条警告并跳过，其余功能不受影响。
 
 **媒体解码**
 
