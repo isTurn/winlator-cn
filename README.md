@@ -60,6 +60,16 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - 修复新建容器时删掉的默认环境变量被迁移逻辑重新加回的问题（例如 `DXVK_HUD`）：从未启动过的容器没有记录 `appVersion`，被当成版本低于 16 的老容器而触发了默认值回填
 - Box64 预设默认从「性能模式」改为「兼容模式」，性能模式关掉了 NaN/舍入的精确处理，老游戏容易算错数值或直接崩溃
 
+**安装**
+
+签名已更换，这一版必须卸载重装。上一版用的是另一台机器随机生成的 debug 密钥，本机已不存在、无法复现。从本版起改用仓库内固定的发布密钥（`keystore/release.jks`，RSA 4096，有效期 100 年），本地构建与 CI 产出一致，以后各版本可直接覆盖升级。
+
+卸载会清空 `/data/data/com.winlator/files/rootfs`，容器、wine prefix、已装程序一并丢失，有要保留的先导出到手机存储。
+
+- 包名 `com.winlator`，`versionCode 33`，`versionName 11.2.cn.04`
+- 首次进入容器解压约 44 MB 资产，一次性
+- 签名指纹 SHA-256 `30909ca0af12275566620058d4285e00764d1d249ab85e8d6085b0522246830c`，可用 `apksigner verify --print-certs` 核对
+
 **已知问题**
 
 - 起点菜单中部分选项首次显示不全，鼠标扫过才补上。已排除渲染/上传/damage 链路，剩余怀疑在 Wine 自身的菜单绘制与裁剪，尚未解决
