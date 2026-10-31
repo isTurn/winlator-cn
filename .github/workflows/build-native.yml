@@ -1,4 +1,4 @@
-name: 编译apk（含C编译，不含assets）
+name: 编译apk（含C编译）
 
 on:
   workflow_dispatch:
@@ -18,8 +18,22 @@ jobs:
           lfs: false
           fetch-depth: 1
 
-      - name: Remove assets
-        run: rm -rf app/src/main/assets
+      # 这里原本有一句 rm -rf app/src/main/assets，是为了让「assets 不在仓库里」的时代
+      # 也能跑通构建。现在 rootfs.tzst 等资产已经入库，删掉 assets 只会产出一个装上去
+      # 就起不来的空壳 APK，所以改成构建前校验，缺文件就直接失败并指出缺哪个。
+      - name: Verify assets
+        run: |
+          missing=0
+          for f in rootfs.tzst rootfs_patches.tzst container_pattern.tzst \
+                   container_addons.tzst xkb.tzst gst_codecs.tzst wfm.tzst pulseaudio.tzst; do
+            if [ ! -s "app/src/main/assets/$f" ]; then
+              echo "::error::缺少必需资产 app/src/main/assets/$f"
+              missing=1
+            else
+              echo "ok  $f  $(stat -c%s "app/src/main/assets/$f") bytes"
+            fi
+          done
+          exit $missing
 
       - name: Set up JDK
         uses: actions/setup-java@v5

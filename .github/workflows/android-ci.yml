@@ -1,4 +1,4 @@
-name: 编译apk（仅编译java）
+name: 编译检查（仅Java，产物不可安装）
 
 on:
   push:
@@ -19,13 +19,28 @@ jobs:
           lfs: false # 彻底禁止下载任何LFS文件
           fetch-depth: 1 # 只拉取最新一次提交
 
-      - name: Remove assets
-        run: rm -rf app/src/main/assets
+      # 原本这里是 rm -rf app/src/main/assets，会把 rootfs.tzst 等运行时资产一并删掉。
+      # 现在资产已入库，改成校验：缺任何一个直接失败，而不是静默产出一个空壳 APK。
+      - name: Verify assets
+        run: |
+          missing=0
+          for f in rootfs.tzst rootfs_patches.tzst container_pattern.tzst \
+                   container_addons.tzst xkb.tzst gst_codecs.tzst wfm.tzst pulseaudio.tzst; do
+            if [ ! -s "app/src/main/assets/$f" ]; then
+              echo "::error::缺少必需资产 app/src/main/assets/$f"
+              missing=1
+            fi
+          done
+          exit $missing
 
       - name: Remove native sources
         # 配合下面 assembleRelease 的 -PskipNative：本流程不编译任何 C/C++。
         # 删掉 cpp 还能在 -PskipNative 万一被漏掉时立刻构建失败，
         # 而不是悄悄退回去做一次完整的原生编译。
+        # 注意：跳过原生构建也意味着 APK 里没有 libwinlator.so，
+        # 而 MainApplication 启动时就会 loadLibrary("winlator")，
+        # 所以本流程的产物只能用来验证 Java 能否编译，无法安装运行。
+        # 需要可安装的包请用 build-native.yml。
         run: rm -rf app/src/main/cpp
 
       - name: Set up JDK
@@ -70,11 +85,12 @@ jobs:
           BRANCH=${BRANCH//\//-}
           SHA=$(git rev-parse --short HEAD)
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          mv app/build/outputs/apk/release/app-release.apk "Winlator-${BRANCH}-${SHA}-${TIMESTAMP}.apk"
+          # 文件名里带 java-only，避免被当成可安装的发行包拿走。
+          mv app/build/outputs/apk/release/app-release.apk "Winlator-java-only-${BRANCH}-${SHA}-${TIMESTAMP}.apk"
       
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: apk
+          name: apk-java-only
           path: "*.apk"
           retention-days: 7
