@@ -74,6 +74,22 @@ public class XlorieServerComponent extends EnvironmentComponent {
     private static final String ADDONS_STAMP = ADDONS_DRIVE_C + "/.winlator-addons";
     private static final String ADDONS_STAMP_VERSION = "1";
 
+    /**
+     * The Mono runtime and the Microsoft.NET tree, unpacked next to the other drive_c content so
+     * every new container starts with C:\\windows\\mono and C:\\windows\\Microsoft.NET already in
+     * place. mscoree.dll resolves a managed executable by looking for
+     * {@code <windows>\mono\mono-2.0\bin\libmono-2.0-x86_64.dll}, which is exactly the layout kept
+     * inside dotnet.tzst, so a game that ships a .NET executable works without running wine-mono's
+     * installer first.
+     *
+     * Kept in its own asset (not merged into container_addons.tzst) so the two can be versioned
+     * independently: this payload is ~60 MB compressed and changes on a completely different
+     * schedule than the fonts and runtimes.
+     */
+    private static final String DOTNET_ASSET = "dotnet.tzst";
+    private static final String DOTNET_STAMP = ADDONS_DRIVE_C + "/windows/.winlator-dotnet";
+    private static final String DOTNET_STAMP_VERSION = "1";
+
     private static final String WINEPREFIX_DIR = "/home/xuser/.wine";
 
     /**
@@ -147,6 +163,7 @@ public class XlorieServerComponent extends EnvironmentComponent {
         installMediaPlugins(rootDir);
         installWfm(rootDir);
         installContainerAddons(rootDir);
+        installDotnetRuntime(rootDir);
 
         // The native server reads these through getenv() in its own process, so they have to be set
         // with setenv() rather than in the guest program's env var list.
@@ -341,6 +358,32 @@ public class XlorieServerComponent extends EnvironmentComponent {
 
         FileUtils.writeString(stamp, ADDONS_STAMP_VERSION);
         Log.d(TAG, "Installed bundled container addons into "+driveC);
+    }
+
+    /**
+     * Drops the bundled Mono runtime and Microsoft.NET tree into drive_c\windows.
+     *
+     * Runs after {@link #installContainerAddons(File)} on purpose: container addons already create
+     * drive_c\windows, so by this point the directory is known to exist and we never have to guess
+     * whether the wineprefix is ready.
+     */
+    private void installDotnetRuntime(File rootDir) {
+        File driveC = new File(rootDir, ADDONS_DRIVE_C);
+        File stamp = new File(rootDir, DOTNET_STAMP);
+        if (DOTNET_STAMP_VERSION.equals(readStampFile(stamp))) return;
+
+        if (!driveC.isDirectory()) {
+            Log.w(TAG, "No wineprefix at "+driveC+", skipping the bundled .NET runtime");
+            return;
+        }
+
+        if (!TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, environment.getContext(), DOTNET_ASSET, driveC)) {
+            Log.w(TAG, "Failed to extract "+DOTNET_ASSET);
+            return;
+        }
+
+        FileUtils.writeString(stamp, DOTNET_STAMP_VERSION);
+        Log.d(TAG, "Installed bundled Mono runtime and Microsoft.NET into "+driveC);
     }
 
     private void registerBundledFonts(File rootDir) {

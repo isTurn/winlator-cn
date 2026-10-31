@@ -45,6 +45,14 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - 按版本戳控制，只解压一次；解压失败只记警告，不影响启动
 - 代价是每个容器首次启动多解压约 90 MB
 
+**内置 .NET 运行时**
+
+- 新增 `dotnet.tzst`，同样是每个容器首次进入时解压到 `drive_c`，落地为 `C:\windows\mono` 与 `C:\windows\Microsoft.NET`
+- `mono` 里有 Mono 6.13 的两个运行时（`libmono-2.0-x86.dll` / `libmono-2.0-x86_64.dll`）与完整程序集树（`2.0-api` 到 `4.8-api`、GAC、msbuild、xbuild）
+- `Microsoft.NET` 里有 `Framework` / `Framework64` 两套 `v1.1.4322`→`v4.0.30319` 目录
+- 作用：`mscoree.dll` 是按 `C:\windows\mono\mono-2.0\bin\libmono-2.0-x86_64.dll` 这个路径找宿主运行时的，有了这份内容，带 .NET 可执行文件或受管 DLL 的程序可以直接跑，不必先装 wine-mono
+- 压缩后约 60 MB，单独成包，与 `container_addons` 各管各的版本戳
+
 **媒体解码**
 
 - 新增 `gst_codecs` 资产，补上 AC-3 / E-AC-3、Vorbis、Opus、FLAC、ADPCM 与 MPEG-TS 解封装。rootfs 里的 FFmpeg 是静态链接进 `libgstlibav.so` 的，构建时没开这些，含对应音轨的过场动画会直接没声音
@@ -67,7 +75,7 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 卸载会清空 `/data/data/com.winlator/files/rootfs`，容器、wine prefix、已装程序一并丢失，有要保留的先导出到手机存储。
 
 - 包名 `com.winlator`，`versionCode 33`，`versionName 11.2.cn.04`
-- 首次进入容器解压约 44 MB 资产，一次性
+- 首次进入容器解压约 104 MB 资产（运行库/字体 44 MB + .NET 运行时 60 MB），一次性
 - 签名指纹 SHA-256 `30909ca0af12275566620058d4285e00764d1d249ab85e8d6085b0522246830c`，可用 `apksigner verify --print-certs` 核对
 
 **已知问题**
