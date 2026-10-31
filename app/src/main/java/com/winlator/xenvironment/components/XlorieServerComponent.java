@@ -90,6 +90,23 @@ public class XlorieServerComponent extends EnvironmentComponent {
     private static final String DOTNET_STAMP = ADDONS_DRIVE_C + "/windows/.winlator-dotnet";
     private static final String DOTNET_STAMP_VERSION = "1";
 
+    /**
+     * Code page tables Wine ships without. 54936 (GB18030) is the one that matters in practice:
+     * the rootfs only carries the 76 tables wine itself builds, and GB18030 is not among them, so
+     * any program whose ANSI entry points were compiled against 54936 gets a failed lookup and a
+     * silently empty result. Chinese-localised games hit this through class names - the name is
+     * converted to nothing, CreateWindowExW fails, and the game exits on its own with no message.
+     *
+     * The file goes into drive_c\windows\system32 because that is ntdll's documented fallback:
+     * NtGetNlsSectionPtr first tries <wineprefix of the running build>/share/wine/nls/c_%03u.nls,
+     * and when that lookup fails it converts the DOS path \??\C:\windows\system32\c_%03u.nls and
+     * opens it from the prefix. Keeping it in drive_c means it travels with each container instead
+     * of being patched into the shared rootfs.
+     */
+    private static final String NLS_ASSET = "nls.tzst";
+    private static final String NLS_STAMP = ADDONS_DRIVE_C + "/windows/.winlator-nls";
+    private static final String NLS_STAMP_VERSION = "1";
+
     private static final String WINEPREFIX_DIR = "/home/xuser/.wine";
 
     /**
@@ -164,6 +181,7 @@ public class XlorieServerComponent extends EnvironmentComponent {
         installWfm(rootDir);
         installContainerAddons(rootDir);
         installDotnetRuntime(rootDir);
+        installNlsCodePages(rootDir);
 
         // The native server reads these through getenv() in its own process, so they have to be set
         // with setenv() rather than in the guest program's env var list.
@@ -386,8 +404,33 @@ public class XlorieServerComponent extends EnvironmentComponent {
         Log.d(TAG, "Installed bundled Mono runtime and Microsoft.NET into "+driveC);
     }
 
-    private void registerBundledFonts(File rootDir) {
-        File systemRegFile = new File(rootDir, WINEPREFIX_DIR+"/system.reg");
+    /**
+     * Installs the code page tables wine does not ship, currently GB18030 (54936).
+     *
+     * Same shape as the other per-container installers: version stamp, extract into drive_c,
+     * write the stamp. A failure is logged and skipped - a container without GB18030 behaves
+     * exactly like every container did before this existed.
+     */
+    private void installNlsCodePages(File rootDir) {
+        File driveC = new File(rootDir, ADDONS_DRIVE_C);
+        File stamp = new File(rootDir, NLS_STAMP);
+        if (NLS_STAMP_VERSION.equals(readStampFile(stamp))) return;
+
+        if (!driveC.isDirectory()) {
+            Log.w(TAG, "No wineprefix at "+driveC+", skipping the bundled code page tables");
+            return;
+        }
+
+        if (!TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, environment.getContext(), NLS_ASSET, driveC)) {
+            Log.w(TAG, "Failed to extract "+NLS_ASSET);
+            return;
+        }
+
+        FileUtils.writeString(stamp, NLS_STAMP_VERSION);
+        Log.d(TAG, "Installed bundled code page tables into "+driveC);
+    }
+
+    private void registerBundledFonts(File rootDir) {        File systemRegFile = new File(rootDir, WINEPREFIX_DIR+"/system.reg");
         if (!systemRegFile.isFile()) return;
 
         final String[][] fonts = {

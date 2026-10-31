@@ -53,6 +53,13 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - 作用：`mscoree.dll` 是按 `C:\windows\mono\mono-2.0\bin\libmono-2.0-x86_64.dll` 这个路径找宿主运行时的，有了这份内容，带 .NET 可执行文件或受管 DLL 的程序可以直接跑，不必先装 wine-mono
 - 压缩后约 60 MB，单独成包，与 `container_addons` 各管各的版本戳
 
+**内置 GB18030 代码页**
+
+- 新增 `nls.tzst`，把 `c_54936.nls`（GB18030）放进每个容器的 `drive_c\windows\system32`
+- 起因：rootfs 只带 wine 自建的 76 个 NLS 表，其中没有 54936。汉化补丁若用 GB18030 转窗口类名，查表失败得到空串，`CreateWindowExW` 建窗失败，游戏直接退出且没有任何提示
+- ntdll 的查找顺序是「先 `<wine>/share/wine/nls/c_%03u.nls`，失败再按 DOS 路径 `\??\C:\windows\system32\c_%03u.nls` 从 prefix 打开」，所以放在 `drive_c` 就能被找到
+- 顺带一提：这份文件与 rootfs 里 `c_936.nls` 只差头部 4 字节的 CodePage 字段，其余完全一致
+
 **媒体解码**
 
 - 新增 `gst_codecs` 资产，补上 AC-3 / E-AC-3、Vorbis、Opus、FLAC、ADPCM 与 MPEG-TS 解封装。rootfs 里的 FFmpeg 是静态链接进 `libgstlibav.so` 的，构建时没开这些，含对应音轨的过场动画会直接没声音

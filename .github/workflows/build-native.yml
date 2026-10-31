@@ -25,7 +25,7 @@ jobs:
         run: |
           missing=0
           for f in rootfs.tzst rootfs_patches.tzst container_pattern.tzst \
-                   container_addons.tzst dotnet.tzst xkb.tzst gst_codecs.tzst wfm.tzst pulseaudio.tzst; do
+                   container_addons.tzst dotnet.tzst nls.tzst xkb.tzst gst_codecs.tzst wfm.tzst pulseaudio.tzst; do
             if [ ! -s "app/src/main/assets/$f" ]; then
               echo "::error::缺少必需资产 app/src/main/assets/$f"
               missing=1
