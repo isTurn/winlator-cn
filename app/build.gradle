@@ -1,5 +1,14 @@
 apply plugin: 'com.android.application'
 
+// 固定的发布密钥，keystore 与 keystore.properties 都纳入仓库，保证任何人、
+// 任何机器、任何 CI 产出的 APK 签名一致，可以互相覆盖升级。缺文件时退回到
+// 默认的 debug 密钥（仍然可以构建，但装不上正式版），而不是让构建直接失败。
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
 android {
     namespace 'com.winlator'
     compileSdk 35
@@ -12,6 +21,17 @@ android {
         versionName "11.2.cn.04"
     }
 
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         debug {
             minifyEnabled true
@@ -19,6 +39,11 @@ android {
 
             ndk {
                 abiFilters 'arm64-v8a'
+            }
+
+            // debug 包也用同一把发布密钥，这样 debug 与 release 之间也能互相覆盖。
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
             }
         }
 
@@ -28,6 +53,10 @@ android {
 
             ndk {
                 abiFilters 'arm64-v8a'
+            }
+
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
             }
         }
     }

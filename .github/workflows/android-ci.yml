@@ -62,23 +62,12 @@ jobs:
           # 所以升级之后这条覆盖依然必须保留。
           packages: platform-tools
 
-      - name: Create debug keystore
-        run: |
-          keytool -genkey -v -keystore debug.keystore \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
-      
       - name: Build release APK
+        # 签名配置在 app/build.gradle 里从仓库根的 keystore.properties 读取，
+        # keystore 本身也入库，所以这里不再生成临时密钥。
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -PskipNative \
-            -Pandroid.injected.signing.store.file=$PWD/debug.keystore \
-            -Pandroid.injected.signing.store.password=android \
-            -Pandroid.injected.signing.key.alias=androiddebugkey \
-            -Pandroid.injected.signing.key.password=android
-      
+          ./gradlew assembleRelease --no-daemon -PskipNative
       - name: Rename APK
         run: |
           BRANCH=${GITHUB_REF#refs/heads/}
