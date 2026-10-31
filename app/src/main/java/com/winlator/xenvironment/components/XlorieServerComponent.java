@@ -60,7 +60,7 @@ public class XlorieServerComponent extends EnvironmentComponent {
     private static final String WFM_PATH = "/home/xuser/.wine/drive_c/windows/wfm.exe";
     private static final String WFM_STAMP = "/home/xuser/.wine/drive_c/windows/.winlator-wfm";
     /** Bumped whenever wfm.tzst changes, so containers created earlier pick the new build up too. */
-    private static final String WFM_STAMP_VERSION = "1.5-2.9";
+    private static final String WFM_STAMP_VERSION = "1.5-3.0";
 
     /**
      * Per-container payload unpacked straight into the wineprefix drive_c: the CJK fonts Windows

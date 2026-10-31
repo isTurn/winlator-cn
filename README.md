@@ -31,7 +31,7 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - 弹软键盘时先把焦点交给 `LorieView`，焦点只在弹键盘时转移，不抢触控板的外部鼠标捕获
 - 注册 `OnPrimaryClipChangedListener`，剪贴板由单向变为双向（沿用 150ms 时间戳防回声），监听不随窗口焦点摘除
 
-**内置 WFM 1.5-2.9**
+**内置 WFM 1.5-3.0**
 
 - 新增 `wfm.tzst` 资产，按版本戳覆盖 `rootfs_patches` 里的旧版本，老容器下次启动即生效，不需要重建容器
 
@@ -77,7 +77,7 @@ Winlator-CN为Winlator的改版，可通过 Wine 和 Box86/Box64 运行 Windows�
 - VKD3D ([gitlab.winehq.org/wine/vkd3d](https://gitlab.winehq.org/wine/vkd3d))
 - CNC DDraw ([github.com/FunkyFr3sh/cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw))
 - RootFS & WFM by [Waim908](https://github.com/Waim908)
-- WFM 文件管理器 [Waim908/wfm](https://github.com/Waim908/wfm)（内置版本 1.5-2.9）
+- WFM 文件管理器 [Waim908/wfm](https://github.com/Waim908/wfm)（内置版本 1.5-3.0）
 - termux-x11 by [Termux](https://github.com/termux/termux-x11)（X 服务器后端 libXlorie）
 
 特别感谢所有参与这些项目的开发者。<br>
