@@ -25,7 +25,7 @@ jobs:
         run: |
           missing=0
           for f in rootfs.tzst rootfs_patches.tzst container_pattern.tzst \
-                   container_addons.tzst xkb.tzst gst_codecs.tzst wfm.tzst pulseaudio.tzst; do
+                   container_addons.tzst dotnet.tzst xkb.tzst gst_codecs.tzst wfm.tzst pulseaudio.tzst; do
             if [ ! -s "app/src/main/assets/$f" ]; then
               echo "::error::缺少必需资产 app/src/main/assets/$f"
               missing=1
@@ -33,15 +33,6 @@ jobs:
               echo "ok  $f  $(stat -c%s "app/src/main/assets/$f") bytes"
             fi
           done
-          # dotnet.tzst（.NET 运行时，压缩后约 60 MB）超过 GitHub 单文件推送上限，
-          # 只随 Releases 里的 APK 分发，不入库。缺失时仅警告：产出的 APK 少了
-          # C:\windows\mono 与 C:\windows\Microsoft.NET，带 .NET 的程序跑不起来，
-          # 其余功能不受影响。
-          if [ ! -s "app/src/main/assets/dotnet.tzst" ]; then
-            echo "::warning::缺少可选资产 dotnet.tzst，本次产出的 APK 不含内置 .NET 运行时"
-          else
-            echo "ok  dotnet.tzst  $(stat -c%s "app/src/main/assets/dotnet.tzst") bytes"
-          fi
           exit $missing
 
       - name: Set up JDK
